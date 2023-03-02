@@ -7,13 +7,6 @@
 
 #Shared notes doc: https://docs.google.com/document/d/1OrxS69xVh48elGpXuBDVH0tdwRh-sJSfpwKd-3UEsqg/edit#
 
-
-#Steps to work on
-# 1) dowlnoad gagesII
-# 2) downlaod ned raster
-# 3) snag valley charactersitics
-
-
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Setup workspace --------------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -49,6 +42,7 @@ mapview(r) + mapview(gage)
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Use delineation method here: https://doi.org/10.5194/esurf-5-369-2017
 
+#Create hand raster ------------------------------------------------------------
 #Create temp dir
 temp_dir <- tempdir()
 
@@ -94,14 +88,51 @@ wbt_elevation_above_stream(
   wd = temp_dir
 )
 
-
-hand<-raster(paste0(temp_dir, "\\hand.tif"))
+#Pull relative releif (hand?) and channel rasters in to R environment
+hand <- raster(paste0(temp_dir, "\\hand.tif"))
 channel <- raster(paste0(temp_dir, "\\streams.tif"))
-qqnorm(values(hand))
 
 
+#Identify valley bottom --------------------------------------------------------
+#Isolate hand values
+hand_values <- values(hand) %>% as_vector() %>% na.omit()
+
+#limit to 1st and 3rd quartiles
+hand_q25 <- quantile(hand_values, probs = 0.25)
+hand_q75 <- quantile(hand_values, probs = 0.75)
+hand_subset <- hand_values[hand_values>hand_q25]
+hand_subset <- hand_values[hand_values<hand_q75]
+
+#Estiamte distributional parameters
+mean <- mean(hand_subset)
+sd   <- sd(hand_subset)
 
 
+#Create of vector of hand values (if conformed to normal dist)
+hand_expected <- 
+  rnorm(
+    n=length(hand_values), 
+    mean = mean(hand_values), 
+    sd = sd(hand_values))
 
+#Create tibble to look at deviation from qqline
+threshold<-tibble(
+  theoretical_quantiles = qnorm(seq(0, 1, by = 0.001)),
+  emperical_quantiles   = quantile(hand_values, probs = seq(0,1, by = 0.001)),
+  normal_quant          = qnorm(mean, sd, p = seq(0, 1, by = 0.001)), 
+  diff = (emperical_quantiles - normal_quant)/normal_quant*100) %>% 
+  #Filter to where values are within 1% of dist
+  dplyr::filter(abs(diff)<1) %>% 
+  #Identify threshold
+  slice(1) %>% select(emperical_quantiles ) %>% pull()
 
+#Create bunary raster
+valley <- hand < threshold
+valley[valley==0] <- NA
 
+#Plot for funzies
+mapview(gage)+mapview(r)+mapview(valley)
+
+#Isolate Reach -----------------------------------------------------------------
+
+#Estimate valley characteristics ------------------------------------------------
