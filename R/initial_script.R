@@ -260,20 +260,68 @@ stream_shp <- st_transform(stream_shp, crs = st_crs(crs))
 valley_shp <- st_transform(valley_shp, crs = st_crs(crs))
 
 #plot for funzies 
-mapview(r) + mapview(stream_shp) + mapivew(valley_shp) + mapview(gage)
+mapview(r) + mapview(stream_shp) + mapview(valley_shp) + mapview(gage)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 6.0 Define study reach -------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Identify stream reach ---------------------------------------------------------
+#Write files to temp data
+st_write(gage, paste0(temp_dir,'\\gage.shp'), append = F)
+writeRaster(r, paste0(temp_dir, "\\r.tif"), overwrite = T)
+
+#Create Flow accumulation raster
+#Smooth DEM
+wbt_fast_almost_gaussian_filter(
+  input = "r.tif",
+  output = "r_smooth.tif", 
+  sigma = 1.8, 
+  wd = temp_dir
+)
+
+#breach depressions
+wbt_breach_depressions(
+  dem =    "r_smooth.tif",
+  output = "r_breached.tif",
+  fill_pits = F,
+  wd = temp_dir)
+
+#Flow accumulation raster
+wbt_d8_flow_accumulation(
+  input = "r_breached.tif",
+  output = "fac.tif",
+  wd = temp_dir
+)
+
+#Snap gage to channel
+wbt_snap_pour_points(
+  pour_pts = "gage.shp", 
+  flow_accum = "fac.tif", 
+  output = "snap.shp",
+  snap_dist = 100, 
+  wd = temp_dir)
+
+#pull into R env
+gage_snap <- st_read(paste0(temp_dir,"//snap.shp"), crs = st_crs(crs))
+
+#identify study reach
+reach <- stream_shp[st_buffer(gage_snap, 5),]
+
+mapview(reach) + mapview(gage_snap)
+
+#valley reach ------------------------------------------------------------------
 
 
+
+
+
+
+#Semi code ---------------------------------------------------------------------
 #Snap gage to stream link
 #Identify stream link and create XS at begining and end
 #clip valley shape with XS
 #Define Valley slope
-  #Define width -- perhaps average of ~100 XS or something similar
-  #Define valley length (area divided by width)
-  #Define levation change based on stream elevation at start and stop
+#Define width -- perhaps average of ~100 XS or something similar
+#Define valley length (area divided by width)
+#Define levation change based on stream elevation at start and stop
 #Define 
-
-#Estimate valley characteristics ------------------------------------------------
