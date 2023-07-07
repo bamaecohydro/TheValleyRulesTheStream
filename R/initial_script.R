@@ -90,9 +90,9 @@ stream_fun<-function(r, threshold_m2, temp_dir){
   )
   
   #Create Stream Layer
-  stream<-raster(paste0(temp_dir,"\\fac.tif"))
-  stream[stream<threshold_m2]<-NA
-  writeRaster(stream, paste0(temp_dir,"\\stream.tif"), overwrite=T)
+  stream_grd<-raster(paste0(temp_dir,"\\fac.tif"))
+  stream_grd[stream_grd<threshold_m2]<-NA
+  writeRaster(stream_grd, paste0(temp_dir,"\\stream.tif"), overwrite=T)
   
   #Convert stream to vector
   wbt_raster_streams_to_vector(
@@ -102,17 +102,22 @@ stream_fun<-function(r, threshold_m2, temp_dir){
     wd = temp_dir)
   
   #Read streams layer in 
-  streams<-st_read(paste0(temp_dir,"\\streams.shp"), crs=st_crs(r@crs))
+  stream_shp<-st_read(paste0(temp_dir,"\\streams.shp"), crs=st_crs(r@crs))
   
   #Export streams
-  streams
+  list(stream_grd, stream_shp)
 }
 
 #Apply streams function ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Run function
 streams<-stream_fun(r, threshold_m2=2500, temp_dir)
 
+#Define components of output list
+stream_grd <- streams[[1]]
+stream_shp <- streams[[2]]
+
 #Plot for funzies ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-mapview(r) + mapview(streams) + mapview(gage)
+mapview(r) + mapview(stream_shp) + mapview(gage)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 4.0 Define valley bottom -----------------------------------------------------
@@ -214,13 +219,15 @@ valley_fun <- function(r, temp_dir){
 }
 
 #Execute function ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#Run fun
-valley <- valley_fun(r, temp_dir)
+#Run function
+valleys <- valley_fun(r, temp_dir)
 
-#Define components of the list
-valley_grd <- valley[[1]]
-valley_shp <- valley[[2]]
+#Define components of output list
+valley_grd <- valleys[[1]]
+valley_shp <- valleys[[2]]
 
+#Plot for funzies ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+mapview(r) + mapview(stream_shp) + mapview(valley_shp) + mapview(gage)
 
 #Isolate NHDplus Reach ---------------------------------------------------------
 
