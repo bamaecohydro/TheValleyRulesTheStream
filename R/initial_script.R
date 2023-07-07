@@ -6,9 +6,18 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 #Shared notes doc: https://docs.google.com/document/d/1OrxS69xVh48elGpXuBDVH0tdwRh-sJSfpwKd-3UEsqg/edit#
+#Valley Delineation Method: https://doi.org/10.5194/esurf-5-369-2017
+
+#Steps
+#   Download NED Data
+#   Define River Corridor
+#   Define Flow Network
+#   Identify study reach
+#   Develop Geomorphic Metrics 
+
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Setup workspace --------------------------------------------------------------
+# 1.0 Setup workspace ----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #clear workspace (sorry JP!)
 remove(list=ls())
@@ -22,15 +31,15 @@ library(elevatr)
 library(whitebox)
 library(mapview)
 
-#readin gagesII shapefile
-gages <- read_sf("data/gagesII/gagesII_9322_sept30_2011.shp")
+#Create temp dir
+temp_dir <- tempdir()
+
+#read in gagesII shapefile
+gage <- get_gagesII(id = "06879650")
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Download NED data ------------------------------------------------------------
+# 2.0 Download NED data --------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#Konza gage for testing
-gage <- gages %>% filter(STAID == "06879650")
-
 #Download NED
 r <- get_elev_raster(gage, z=14) 
 
@@ -38,14 +47,14 @@ r <- get_elev_raster(gage, z=14)
 mapview(r) + mapview(gage)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Define valley bottom and reach reach -----------------------------------------
+# 3.0 Define flow net ----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#Use delineation method here: https://doi.org/10.5194/esurf-5-369-2017
 
-#Create hand raster ------------------------------------------------------------
-#Create temp dir
-temp_dir <- tempdir()
 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 4.0 Define valley bottom -----------------------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#4.1 Create hand raster --------------------------------------------------------
 #Write raster to temp_dir
 writeRaster(r,paste0(temp_dir, '\\r.tif'), overwrite=T)
 
@@ -92,8 +101,7 @@ wbt_elevation_above_stream(
 hand <- raster(paste0(temp_dir, "\\hand.tif"))
 channel <- raster(paste0(temp_dir, "\\streams.tif"))
 
-
-#Identify valley bottom --------------------------------------------------------
+#4.2 Identify valley bottom ----------------------------------------------------
 #Isolate hand values
 hand_values <- values(hand) %>% as_vector() %>% na.omit()
 
@@ -124,15 +132,25 @@ threshold<-tibble(
   #Filter to where values are within 1% of dist
   dplyr::filter(abs(diff)<1) %>% 
   #Identify threshold
-  slice(1) %>% select(emperical_quantiles ) %>% pull()
+  slice(1) %>% dplyr::select(emperical_quantiles ) %>% pull()
 
-#Create bunary raster
+#Create binary raster
 valley <- hand < threshold
 valley[valley==0] <- NA
 
-#Plot for funzies
-mapview(gage)+mapview(r)+mapview(valley)
+#Convert to polygon using wbt
+writeRaster(valley, paste0(temp_dir, "\\valley.tif"), overwrite=T)
+wbt_raster_to_vector_polygons(
+  input = "valley.tif", 
+  output = "output.shp", 
+  wd=temp_dir)
+valley_shp <- st_read(paste0(temp_dir,"\\output.shp")) 
+st_crs(valley_shp) = 4269
 
-#Isolate Reach -----------------------------------------------------------------
+#Plot for funzies
+mapview(gage)+mapview(r)+mapview(valley_shp)
+
+#Isolate NHDplus Reach ---------------------------------------------------------
+
 
 #Estimate valley characteristics ------------------------------------------------
