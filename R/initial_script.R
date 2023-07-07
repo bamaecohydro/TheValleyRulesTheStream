@@ -49,7 +49,7 @@ mapview(r) + mapview(gage)
 # 3.0 Define flow net ----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Create function to create stream layer ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-stream_fun<-function(r, threshold_m2, temp_dir){
+stream_fun<-function(r, threshold_n_cells, temp_dir){
   
   #Load libraries of interest
   library(tidyverse) #join the cult!
@@ -91,7 +91,7 @@ stream_fun<-function(r, threshold_m2, temp_dir){
   
   #Create Stream Layer
   stream_grd<-raster(paste0(temp_dir,"\\fac.tif"))
-  stream_grd[stream_grd<threshold_m2]<-NA
+  stream_grd[stream_grd<threshold_n_cells]<-NA
   writeRaster(stream_grd, paste0(temp_dir,"\\stream.tif"), overwrite=T)
   
   #Convert stream to vector
@@ -110,7 +110,7 @@ stream_fun<-function(r, threshold_m2, temp_dir){
 
 #Apply streams function ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Run function
-streams<-stream_fun(r, threshold_m2=2500, temp_dir)
+streams<-stream_fun(r, threshold_n_cells=10000, temp_dir)
 
 #Define components of output list
 stream_grd <- streams[[1]]
@@ -123,7 +123,7 @@ mapview(r) + mapview(stream_shp) + mapview(gage)
 # 4.0 Define valley bottom -----------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 4.1 Create function to define valley ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-valley_fun <- function(r, temp_dir){
+valley_fun <- function(r, threshold_n_cells, temp_dir){
 
   #Write raster to temp_dir
   writeRaster(r,paste0(temp_dir, '\\r.tif'), overwrite=T)
@@ -155,7 +155,7 @@ valley_fun <- function(r, temp_dir){
   wbt_extract_streams(
     flow_accum = "r_fac.tif", 
     output = "streams.tif", 
-    threshold = 1000,
+    threshold = threshold_n_cells,
     wd=temp_dir
   )
   
@@ -220,7 +220,7 @@ valley_fun <- function(r, temp_dir){
 
 #Execute function ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Run function
-valleys <- valley_fun(r, temp_dir)
+valleys <- valley_fun(r, 10000, temp_dir)
 
 #Define components of output list
 valley_grd <- valleys[[1]]
@@ -229,7 +229,26 @@ valley_shp <- valleys[[2]]
 #Plot for funzies ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 mapview(r) + mapview(stream_shp) + mapview(valley_shp) + mapview(gage)
 
-#Isolate NHDplus Reach ---------------------------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 5.0 Reproject spatial data into planar coordinates ---------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Define utm zone
+utm_zone <- floor((st_coordinates(gage)[1] + 180)/6)+1
 
+#Define CRS
+crs <- paste0("+proj=utm +zone=",utm_zone," +datum=WGS84 +units=m +no_defs")
+
+#reproject raster datasets of interest
+r          <- projectRaster(r,          crs = crs)
+stream_grd <- projectRaster(stream_grd, crs = crs)
+valley_grd <- projectRaster(valley_grd, crs = crs)
+
+#reproject vector datasets of interest
+gage       <- st_transform(gage,       crs = st_crs(crs))
+stream_shp <- st_transform(stream_shp, crs = st_crs(crs))
+valley_shp <- st_transform(valley_shp, crs = st_crs(crs))
+
+#plot for funzies 
+mapview(r) + mapview(stream_shp) + mapivew(valley_shp) + mapview(gage)
 
 #Estimate valley characteristics ------------------------------------------------
