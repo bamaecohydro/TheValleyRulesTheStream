@@ -15,7 +15,6 @@
 #   Identify study reach
 #   Develop Geomorphic Metrics 
 
-
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 1.0 Setup workspace ----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -49,106 +48,179 @@ mapview(r) + mapview(gage)
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 3.0 Define flow net ----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Create function to create stream layer ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+stream_fun<-function(r, threshold_m2, temp_dir){
+  
+  #Load libraries of interest
+  library(tidyverse) #join the cult!
+  library(raster)
+  library(sf)
+  library(whitebox)
 
+  #Export DEM to scratch workspace
+  writeRaster(r, paste0(temp_dir,"r.tif"), overwrite=T)
+  
+  #Smooth DEM
+  wbt_fast_almost_gaussian_filter(
+    input = "r.tif",
+    output = "r_smooth.tif", 
+    sigma = 1.8, 
+    wd = temp_dir
+  )
+  
+  #breach depressions
+  wbt_breach_depressions(
+    dem =    "r_smooth.tif",
+    output = "r_breached.tif",
+    fill_pits = F,
+    wd = temp_dir)
+  
+  #Flow direction raster
+  wbt_d8_pointer(
+    dem= "r_breached.tif",
+    output ="fdr.tif",
+    wd = temp_dir
+  )
+  
+  #Flow accumulation raster
+  wbt_d8_flow_accumulation(
+    input = "r_breached.tif",
+    output = "fac.tif",
+    wd = temp_dir
+  )
+  
+  #Create Stream Layer
+  stream<-raster(paste0(temp_dir,"\\fac.tif"))
+  stream[stream<threshold_m2]<-NA
+  writeRaster(stream, paste0(temp_dir,"\\stream.tif"), overwrite=T)
+  
+  #Convert stream to vector
+  wbt_raster_streams_to_vector(
+    streams = "stream.tif",
+    d8_pntr = "fdr.tif",
+    output = "streams.shp",
+    wd = temp_dir)
+  
+  #Read streams layer in 
+  streams<-st_read(paste0(temp_dir,"\\streams.shp"), crs=st_crs(r@crs))
+  
+  #Export streams
+  streams
+}
+
+#Apply streams function ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+streams<-stream_fun(r, threshold_m2=2500, temp_dir)
+
+#Plot for funzies ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+mapview(r) + mapview(streams) + mapview(gage)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 4.0 Define valley bottom -----------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#4.1 Create hand raster --------------------------------------------------------
-#Write raster to temp_dir
-writeRaster(r,paste0(temp_dir, '\\r.tif'), overwrite=T)
+# 4.1 Create function to define valley ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+valley_fun <- function(r, temp_dir){
 
-#Smooth the dem
-wbt_fast_almost_gaussian_filter(
-  input = "r.tif",
-  output = "r_smooth.tif", 
-  sigma = 1.8, 
-  wd = temp_dir
-)
+  #Write raster to temp_dir
+  writeRaster(r,paste0(temp_dir, '\\r.tif'), overwrite=T)
+  
+  #Smooth the dem
+  wbt_fast_almost_gaussian_filter(
+    input = "r.tif",
+    output = "r_smooth.tif", 
+    sigma = 1.8, 
+    wd = temp_dir
+  )
+  
+  #breach depressions (for flownet analysis only)
+  wbt_breach_depressions(
+    dem = "r_smooth.tif",
+    output = "r_breach.tif", 
+    wd= temp_dir
+  )
+  
+  #flow accumulation
+  wbt_d8_flow_accumulation(
+    input = 'r_breach.tif',
+    output = 'r_fac.tif',
+    pntr = F,
+    wd = temp_dir
+  )
+  
+  #Create stream raster
+  wbt_extract_streams(
+    flow_accum = "r_fac.tif", 
+    output = "streams.tif", 
+    threshold = 1000,
+    wd=temp_dir
+  )
+  
+  #Estiamte Height above stream
+  wbt_elevation_above_stream(
+    dem = "r_breach.tif", 
+    stream = "streams.tif", 
+    output = "hand.tif",
+    wd = temp_dir
+  )
+  
+  #Pull relative releif (hand?) and channel rasters in to R environment
+  hand <- raster(paste0(temp_dir, "\\hand.tif"))
+  channel <- raster(paste0(temp_dir, "\\streams.tif"))
 
-#breach depressions (for flownet analysis only)
-wbt_breach_depressions(
-  dem = "r_smooth.tif",
-  output = "r_breach.tif", 
-  wd= temp_dir
-)
+  #Isolate hand values
+  hand_values <- values(hand) %>% as_vector() %>% na.omit()
+  
+  #limit to 1st and 3rd quartiles
+  hand_q25 <- quantile(hand_values, probs = 0.25)
+  hand_q75 <- quantile(hand_values, probs = 0.75)
+  hand_subset <- hand_values[hand_values>hand_q25]
+  hand_subset <- hand_values[hand_values<hand_q75]
+  
+  #Estiamte distributional parameters
+  mean <- mean(hand_subset)
+  sd   <- sd(hand_subset)
+  
+  #Create of vector of hand values (if conformed to normal dist)
+  hand_expected <- 
+    rnorm(
+      n=length(hand_values), 
+      mean = mean(hand_values), 
+      sd = sd(hand_values))
+  
+  #Create tibble to look at deviation from qqline
+  threshold<-tibble(
+    theoretical_quantiles = qnorm(seq(0, 1, by = 0.001)),
+    emperical_quantiles   = quantile(hand_values, probs = seq(0,1, by = 0.001)),
+    normal_quant          = qnorm(mean, sd, p = seq(0, 1, by = 0.001)), 
+    diff = (emperical_quantiles - normal_quant)/normal_quant*100) %>% 
+    #Filter to where values are within 1% of dist
+    dplyr::filter(abs(diff)<1) %>% 
+    #Identify threshold
+    slice(1) %>% dplyr::select(emperical_quantiles ) %>% pull()
+  
+  #Create binary raster
+  valley_grd <- hand < threshold
+  valley_grd[valley_grd==0] <- NA
+  
+  #Convert to polygon using wbt
+  writeRaster(valley_grd, paste0(temp_dir, "\\valley.tif"), overwrite=T)
+  wbt_raster_to_vector_polygons(
+    input = "valley.tif", 
+    output = "output.shp", 
+    wd=temp_dir)
+  valley_shp <- st_read(paste0(temp_dir,"\\output.shp"), crs=st_crs(r@crs)) 
+  
+  #Export Valley Bottom
+  list(valley_grd, valley_shp)
+}
 
-#flow accumulation
-wbt_d8_flow_accumulation(
-  input = 'r_breach.tif',
-  output = 'r_fac.tif',
-  pntr = F,
-  wd = temp_dir
-)
+#Execute function ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Run fun
+valley <- valley_fun(r, temp_dir)
 
-#Create stream raster
-wbt_extract_streams(
-  flow_accum = "r_fac.tif", 
-  output = "streams.tif", 
-  threshold = 1000,
-  wd=temp_dir
-)
+#Define components of the list
+valley_grd <- valley[[1]]
+valley_shp <- valley[[2]]
 
-#Estiamte Height above stream
-wbt_elevation_above_stream(
-  dem = "r_breach.tif", 
-  stream = "streams.tif", 
-  output = "hand.tif",
-  wd = temp_dir
-)
-
-#Pull relative releif (hand?) and channel rasters in to R environment
-hand <- raster(paste0(temp_dir, "\\hand.tif"))
-channel <- raster(paste0(temp_dir, "\\streams.tif"))
-
-#4.2 Identify valley bottom ----------------------------------------------------
-#Isolate hand values
-hand_values <- values(hand) %>% as_vector() %>% na.omit()
-
-#limit to 1st and 3rd quartiles
-hand_q25 <- quantile(hand_values, probs = 0.25)
-hand_q75 <- quantile(hand_values, probs = 0.75)
-hand_subset <- hand_values[hand_values>hand_q25]
-hand_subset <- hand_values[hand_values<hand_q75]
-
-#Estiamte distributional parameters
-mean <- mean(hand_subset)
-sd   <- sd(hand_subset)
-
-
-#Create of vector of hand values (if conformed to normal dist)
-hand_expected <- 
-  rnorm(
-    n=length(hand_values), 
-    mean = mean(hand_values), 
-    sd = sd(hand_values))
-
-#Create tibble to look at deviation from qqline
-threshold<-tibble(
-  theoretical_quantiles = qnorm(seq(0, 1, by = 0.001)),
-  emperical_quantiles   = quantile(hand_values, probs = seq(0,1, by = 0.001)),
-  normal_quant          = qnorm(mean, sd, p = seq(0, 1, by = 0.001)), 
-  diff = (emperical_quantiles - normal_quant)/normal_quant*100) %>% 
-  #Filter to where values are within 1% of dist
-  dplyr::filter(abs(diff)<1) %>% 
-  #Identify threshold
-  slice(1) %>% dplyr::select(emperical_quantiles ) %>% pull()
-
-#Create binary raster
-valley <- hand < threshold
-valley[valley==0] <- NA
-
-#Convert to polygon using wbt
-writeRaster(valley, paste0(temp_dir, "\\valley.tif"), overwrite=T)
-wbt_raster_to_vector_polygons(
-  input = "valley.tif", 
-  output = "output.shp", 
-  wd=temp_dir)
-valley_shp <- st_read(paste0(temp_dir,"\\output.shp")) 
-st_crs(valley_shp) = 4269
-
-#Plot for funzies
-mapview(gage)+mapview(r)+mapview(valley_shp)
 
 #Isolate NHDplus Reach ---------------------------------------------------------
 
