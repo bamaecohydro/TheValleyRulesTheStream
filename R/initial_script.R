@@ -15,6 +15,9 @@
 #   Identify study reach
 #   Develop Geomorphic Metrics 
 
+#Need to figure out soils data download + confining layer depth
+#  perhaps https://cran.r-project.org/web/packages/soilDB/soilDB.pdf
+
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 1.0 Setup workspace ----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -94,9 +97,17 @@ stream_fun<-function(r, threshold_n_cells, temp_dir){
   stream_grd[stream_grd<threshold_n_cells]<-NA
   writeRaster(stream_grd, paste0(temp_dir,"\\stream.tif"), overwrite=T)
   
+  #Identify links
+  wbt_stream_link_identifier(
+    d8_pntr = 'fdr.tif',
+    streams = 'streams.tif',
+    output = 'stream_link.tif',
+    wd = temp_dir
+  )
+  
   #Convert stream to vector
   wbt_raster_streams_to_vector(
-    streams = "stream.tif",
+    streams = "stream_link.tif",
     d8_pntr = "fdr.tif",
     output = "streams.shp",
     wd = temp_dir)
@@ -250,5 +261,19 @@ valley_shp <- st_transform(valley_shp, crs = st_crs(crs))
 
 #plot for funzies 
 mapview(r) + mapview(stream_shp) + mapivew(valley_shp) + mapview(gage)
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 6.0 Define study reach -------------------------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+#Snap gage to stream link
+#Identify stream link and create XS at begining and end
+#clip valley shape with XS
+#Define Valley slope
+  #Define width -- perhaps average of ~100 XS or something similar
+  #Define valley length (area divided by width)
+  #Define levation change based on stream elevation at start and stop
+#Define 
 
 #Estimate valley characteristics ------------------------------------------------
