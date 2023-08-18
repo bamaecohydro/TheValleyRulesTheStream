@@ -18,6 +18,13 @@
 #Need to figure out soils data download + confining layer depth
 #  perhaps https://cran.r-project.org/web/packages/soilDB/soilDB.pdf
 
+#Watershed storage data:
+# (1) Watershed Shapefiles Obtained from John Hammond (during the DryRiversRCN)
+# (2) Depth to bedrock: https://doi.org/10.1371/journal.pone.0169748
+#web address: https://data.isric.org/geonetwork/srv/eng/catalog.search#/metadata/f36117ea-9be5-4afd-bb7d-7a3e77bf392a
+# (3) porosity:  https://doi.org/10.1002/2014GL059856
+#web address: https://dataverse.scholarsportal.info/dataset.xhtml?persistentId=doi:10.5683/SP2/DLGXYO
+
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 1.0 Setup workspace ----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -46,7 +53,7 @@ gage <- get_gagesII(id = "06879650")
 r <- get_elev_raster(gage, z=14) 
 
 #plot
-mapview(r) + mapview(gage)
+plot(r) + plot(gage %>% st_geometry(), add=T)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 3.0 Define flow net ----------------------------------------------------------
@@ -61,7 +68,7 @@ stream_fun<-function(r, threshold_n_cells, temp_dir){
   library(whitebox)
 
   #Export DEM to scratch workspace
-  writeRaster(r, paste0(temp_dir,"r.tif"), overwrite=T)
+  writeRaster(r, paste0(temp_dir,"\\r.tif"), overwrite=T)
   
   #Smooth DEM
   wbt_fast_almost_gaussian_filter(
@@ -100,7 +107,7 @@ stream_fun<-function(r, threshold_n_cells, temp_dir){
   #Identify links
   wbt_stream_link_identifier(
     d8_pntr = 'fdr.tif',
-    streams = 'streams.tif',
+    streams = 'stream.tif',
     output = 'stream_link.tif',
     wd = temp_dir
   )
@@ -113,7 +120,7 @@ stream_fun<-function(r, threshold_n_cells, temp_dir){
     wd = temp_dir)
   
   #Read streams layer in 
-  stream_shp<-st_read(paste0(temp_dir,"\\streams.shp"), crs=st_crs(r@crs))
+  stream_shp<-st_read(paste0(temp_dir,"\\streams.shp"), crs=st_crs(r))
   
   #Export streams
   list(stream_grd, stream_shp)
@@ -128,7 +135,7 @@ stream_grd <- streams[[1]]
 stream_shp <- streams[[2]]
 
 #Plot for funzies ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-mapview(r) + mapview(stream_shp) + mapview(gage)
+mapview(stream_shp) + mapview(gage)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 4.0 Define valley bottom -----------------------------------------------------
@@ -223,7 +230,7 @@ valley_fun <- function(r, threshold_n_cells, temp_dir){
     input = "valley.tif", 
     output = "output.shp", 
     wd=temp_dir)
-  valley_shp <- st_read(paste0(temp_dir,"\\output.shp"), crs=st_crs(r@crs)) 
+  valley_shp <- st_read(paste0(temp_dir,"\\output.shp"), crs=st_crs(r)) 
   
   #Export Valley Bottom
   list(valley_grd, valley_shp)
@@ -238,7 +245,7 @@ valley_grd <- valleys[[1]]
 valley_shp <- valleys[[2]]
 
 #Plot for funzies ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-mapview(r) + mapview(stream_shp) + mapview(valley_shp) + mapview(gage)
+mapview(stream_shp) + mapview(valley_shp) + mapview(gage)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 5.0 Reproject spatial data into planar coordinates ---------------------------
@@ -310,7 +317,84 @@ reach <- stream_shp[st_buffer(gage_snap, 5),]
 mapview(reach) + mapview(gage_snap)
 
 #valley reach ------------------------------------------------------------------
+#Create XS at ends of study reach
+xs_fun<-function(reach, width=1000){
+  
+  #Define points along reach
+  reach_pnts <- st_cast(reach, "POINT")
+  
+  #Define reach end points
+  reach_end_pnts <- bind_rows(reach_pnts[1,],reach_pnts[nrow(reach_pnts),])
 
+  #Estimate planar slope along reach
+  reach_coord<-st_coordinates(reach_pnts)
+  reach_slope<-(reach_coord[1,"Y"]-reach_coord[nrow(reach_coord),"Y"])/(reach_coord[1,"X"]-reach_coord[nrow(reach_coord),"X"])
+  
+  #Estimate inverse slope
+  xs_slope <- -1/reach_slope
+  
+  #Estimate endpoints of XS_1
+  xs_coord_1 <- st_coordinates(reach_end_pnts[1,])
+  xs_coord_1 <-rbind(
+    xs_coord_1, 
+    matrix(0, nrow=2, ncol=2)
+  )
+  xs_coord_1[2,"X"] <- xs_coord_1[1,"X"] + width/2*cos(atan(xs_slope))
+  xs_coord_1[2,"Y"] <- xs_coord_1[1,"Y"] + width/2*sin(atan(xs_slope))
+  xs_coord_1[3,"X"] <- xs_coord_1[1,"X"] - width/2*cos(atan(xs_slope))
+  xs_coord_1[3,"Y"] <- xs_coord_1[1,"Y"] - width/2*sin(atan(xs_slope))
+  xs_coord_1<-xs_coord_1[-1,]
+  
+  #Create XS
+  xs_1<-xs_coord_1 %>%  
+    as_tibble() %>% 
+    st_as_sf(coords = c("X","Y")) %>% 
+    st_coordinates() %>% 
+    st_linestring() %>% 
+    st_sfc(.) %>% 
+    st_set_crs(st_crs(stream_shp)) %>% 
+    st_as_sf() 
+  
+  #Estimate endpoints of XS_1
+  xs_coord_2 <- st_coordinates(reach_end_pnts[2,])
+  xs_coord_2 <-rbind(
+    xs_coord_2, 
+    matrix(0, nrow=2, ncol=2)
+  )
+  xs_coord_2[2,"X"] <- xs_coord_2[1,"X"] + width/2*cos(atan(xs_slope))
+  xs_coord_2[2,"Y"] <- xs_coord_2[1,"Y"] + width/2*sin(atan(xs_slope))
+  xs_coord_2[3,"X"] <- xs_coord_2[1,"X"] - width/2*cos(atan(xs_slope))
+  xs_coord_2[3,"Y"] <- xs_coord_2[1,"Y"] - width/2*sin(atan(xs_slope))
+  xs_coord_2<-xs_coord_2[-1,]
+  
+  #Create XS
+  xs_2<-xs_coord_2 %>%  
+    as_tibble() %>% 
+    st_as_sf(coords = c("X","Y")) %>% 
+    st_coordinates() %>% 
+    st_linestring() %>% 
+    st_sfc(.) %>% 
+    st_set_crs(st_crs(stream_shp)) %>% 
+    st_as_sf() 
+  
+  #Export XS Shape
+  xs <- bind_rows(xs_1, xs_2)
+}
+xs <- xs_fun(reach)
+xs <- st_combine(xs)
+xs <- st_cast(xs, 'MULTILINESTRING')
+
+#Split polygon by xs
+valley_chopped_shp <- st_split(valley_shp, xs) %>%  st_collection_extract(c("POLYGON"))
+valley_reach <- valley_chopped_shp[gage_snap,]
+
+#Plot for funzies
+mapview(valley_reach) + mapview(gage)
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 7.0 Extract metrics ----------------------------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Extract metrics
 
 
 
