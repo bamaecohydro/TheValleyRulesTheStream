@@ -46,6 +46,10 @@ temp_dir <- tempdir()
 #read in gagesII shapefile
 gage <- get_gagesII(id = "06879650")
 
+#Read in storage and porosity data
+d2b <- raster("data//BDTICM_M_250m_ll.tif")
+porosity <- st_read("data//GLHYMPS//glhymps_conus.shp")
+
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 2.0 Download NED data --------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -392,20 +396,54 @@ valley_reach <- valley_chopped_shp[gage_snap,]
 mapview(valley_reach) + mapview(gage)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 7.0 Extract metrics ----------------------------------------------------------
+# 7.0 Tidy storage data---------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#Extract metrics
+#depth to bedrock
+valley_reach_proj <- st_transform(valley_reach, st_crs(d2b))
+valley_d2b <- raster::crop(d2b, valley_reach_proj)
+valley_d2b <- raster::mask(valley_d2b, valley_reach_proj)
+valley_d2b <- cellStats(valley_d2b, mean)/100
+
+#porosity
+valley_reach_proj <- st_transform(valley_reach, st_crs(porosity))
+valley_porosity <- porosity[valley_reach_proj,]
+valley_porosity <- mean(valley_porosity$Porosity, na.rm=T)
+
+#storage
+valley_storage_m <- valley_d2b*valley_porosity
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 8.0 Extract metrics ----------------------------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Define center of XS
+xs <- xs_fun(reach)
+xs_centroid <- st_centroid(xs)
+
+#Define valley length
+valley_length <- st_distance(xs_centroid) %>% max(.) %>% paste() %>% as.numeric()
+
+#Define valley area
+valley_area <- st_area(valley_reach) %>% paste() %>% as.numeric()
+
+#Define valley width
+valley_width <- valley_area/valley_length
+
+#Define valley slope
+valley_slope <- (max(raster::extract(r, xs_centroid), na.rm=T) - min(raster::extract(r, xs_centroid), na.rm=T))/valley_length
+
+#Define valley storage
+valley_storage_m3 <- valley_storage_m*valley_area
+
+#output
+valley_metrics <- tibble(
+  valley_length,
+  valley_area,
+  valley_width, 
+  valley_slope, 
+  valley_storage_m, 
+  valley_storage_m3
+)
+valley_metrics
 
 
 
-
-
-#Semi code ---------------------------------------------------------------------
-#Snap gage to stream link
-#Identify stream link and create XS at begining and end
-#clip valley shape with XS
-#Define Valley slope
-#Define width -- perhaps average of ~100 XS or something similar
-#Define valley length (area divided by width)
-#Define levation change based on stream elevation at start and stop
-#Define 
