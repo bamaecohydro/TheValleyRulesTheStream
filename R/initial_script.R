@@ -39,6 +39,8 @@ library(nhdplusTools)
 library(elevatr)
 library(whitebox)
 library(mapview)
+library(soilDB)
+library(aqp)
 
 #Create temp dir
 temp_dir <- tempdir()
@@ -222,7 +224,7 @@ valley_fun <- function(r, threshold_n_cells, temp_dir){
     #Filter to where values are within 1% of dist
     dplyr::filter(abs(diff)<1) %>% 
     #Identify threshold
-    slice(1) %>% dplyr::select(emperical_quantiles ) %>% pull()
+    dplyr::slice(1) %>% dplyr::select(emperical_quantiles ) %>% pull()
   
   #Create binary raster
   valley_grd <- hand < threshold
@@ -402,7 +404,7 @@ mapview(valley_reach) + mapview(gage)
 valley_reach_proj <- st_transform(valley_reach, st_crs(d2b))
 valley_d2b <- raster::crop(d2b, valley_reach_proj)
 valley_d2b <- raster::mask(valley_d2b, valley_reach_proj)
-valley_d2b <- cellStats(valley_d2b, mean)/100
+valley_d2b <- raster::cellStats(valley_d2b, stat = mean)/100
 
 #porosity
 valley_reach_proj <- st_transform(valley_reach, st_crs(porosity))
@@ -411,6 +413,59 @@ valley_porosity <- mean(valley_porosity$Porosity, na.rm=T)
 
 #storage
 valley_storage_m <- valley_d2b*valley_porosity
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 8.0 Estimate valley soil charactersitcs --------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#consider looking into this data source eventually
+#https://water.usgs.gov/GIS/metadata/usgswrd/XML/ds866_ssurgo_variables.xml
+
+# query map unit records at gage
+res <- SDA_spatialQuery(gage_snap, what = 'mukey')
+mu.is <- format_SQL_in_statement(res$mukey)
+sql <- sprintf("mukey IN %s", mu.is)
+soil_data <- fetchSDA(sql, duplicates = T)
+
+#Create unit table to describe mapunit soil series contributions
+map_unit <- site(soil_data) %>% 
+  as_tibble() %>% 
+  select(cokey, comppct_r)
+
+#Extract Ksat data from mapunit
+valley_ksat <- horizons(soil_data) %>% 
+  as_tibble() %>% 
+  select(cokey,hzdepb_r, hzdept_r,ksat_r) %>% 
+  mutate(
+    hrz_thickness = hzdepb_r - hzdept_r,
+    ksat_thickness = ksat_r*hrz_thickness) %>% 
+  group_by(cokey) %>% 
+  summarise(ksat = sum(ksat_thickness)/sum(hrz_thickness)) %>% 
+  left_join(., map_unit) %>% 
+  mutate(ksat_sum = ksat*comppct_r) %>% 
+  summarise(ksat = sum(ksat_sum, na.rm=T)/100) %>% 
+  pull()
+valley_ksat <- valley_ksat*8.64 #Convert from um/s to cm/day
+
+#Extract soil thickness
+valley_soil_thickness <- horizons(soil_data) %>% 
+  as_tibble() %>% 
+  group_by(cokey) %>% 
+  summarise(max_depth = max(hzdepb_r)) %>% 
+  left_join(., map_unit) %>% 
+  mutate(depth_sum = max_depth*comppct_r) %>% 
+  summarise(depth = sum(depth_sum, na.rm=T)/100) %>% 
+  pull()
+valley_soil_thickness <- valley_soil_thickness*0.0254 #Convert from in to m
+valley_soil_thickness
+
+#Extract soil porosity
+#valley_soil_por <- horizons(soil_data) %>% 
+  # as_tibble() %>% 
+  # mutate(
+  #   por = 1 - (wthirdbar_r/partdensity)
+  # )
+
+
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 8.0 Extract metrics ----------------------------------------------------------
@@ -441,9 +496,13 @@ valley_metrics <- tibble(
   valley_width, 
   valley_slope, 
   valley_storage_m, 
-  valley_storage_m3
+  valley_storage_m3, 
+  valley_ksat, 
+  valley_soil_thickness
 )
 valley_metrics
 
 
-
+# valley_length valley_area valley_width valley_slope valley_storage_m valley_storage_m3
+# <dbl>       <dbl>        <dbl>        <dbl>            <dbl>             <dbl>
+#   1          360.      56010.         156.      0.00818            0.706            39521.
