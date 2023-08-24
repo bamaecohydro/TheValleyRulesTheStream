@@ -28,15 +28,14 @@ remove(list=ls())
 library(tidyverse)
 library(raster)
 library(sf)
+library(lwgeom)
 library(nhdplusTools)
 library(elevatr)
 library(whitebox)
 library(mapview)
 library(soilDB)
 library(aqp)
-
-#Create temp dir
-temp_dir <- tempdir()
+library(parallel)
 
 #read in gagesII shapefile
 gage_data <- read_csv("data//USGS_non_perenial_flow_climate_and_watershed_properties_061820.csv")
@@ -48,14 +47,19 @@ porosity <- st_read("data//GLHYMPS//glhymps_conus.shp")
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 2.0 Create function to characterize reach ------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#Start function
-fun <- function(n, temp_dir = temp_dir, gage_data = gage_data, d2b = d2b, porosity = porosity){
+#function
+fun <- function(n){
+  
 #Identify gage of interest ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Identify gage id 
 staid <- gage_data$staid[n]
 
 #read in gagesII shapefile
 gage <- get_gagesII(id = staid)
+
+#Create temp dir for functional env ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+temp_dir <- paste0("data\\temp\\", staid,"\\")
+dir.create(temp_dir)
 
 # Download NED dem dataset ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 r <- get_elev_raster(gage, z=14) 
@@ -141,7 +145,7 @@ stream_shp <- streams[[2]]
 valley_fun <- function(r, threshold_n_cells, temp_dir){
   
   #Write raster to temp_dir
-  writeRaster(r,paste0(temp_dir, '\\r.tif'), overwrite=T)
+  writeRaster(r,paste0(temp_dir, 'r.tif'), overwrite=T)
   
   #Smooth the dem
   wbt_fast_almost_gaussian_filter(
@@ -183,8 +187,8 @@ valley_fun <- function(r, threshold_n_cells, temp_dir){
   )
   
   #Pull relative releif (hand?) and channel rasters in to R environment
-  hand <- raster(paste0(temp_dir, "\\hand.tif"))
-  channel <- raster(paste0(temp_dir, "\\streams.tif"))
+  hand <- raster(paste0(temp_dir, "hand.tif"))
+  channel <- raster(paste0(temp_dir, "streams.tif"))
   
   #Isolate hand values
   hand_values <- values(hand) %>% as_vector() %>% na.omit()
@@ -198,7 +202,7 @@ valley_fun <- function(r, threshold_n_cells, temp_dir){
   #Estiamte distributional parameters
   mean <- mean(hand_subset)
   sd   <- sd(hand_subset)
-  
+
   #Create of vector of hand values (if conformed to normal dist)
   hand_expected <- 
     rnorm(
@@ -211,23 +215,24 @@ valley_fun <- function(r, threshold_n_cells, temp_dir){
     theoretical_quantiles = qnorm(seq(0, 1, by = 0.001)),
     emperical_quantiles   = quantile(hand_values, probs = seq(0,1, by = 0.001)),
     normal_quant          = qnorm(mean, sd, p = seq(0, 1, by = 0.001)), 
-    diff = (emperical_quantiles - normal_quant)/normal_quant*100) %>% 
+    diff = (emperical_quantiles - normal_quant)/normal_quant*100, 
+    abs_diff = abs(diff)) %>%
     #Filter to where values are within 1% of dist
-    dplyr::filter(abs(diff)<1) %>% 
+    dplyr::filter(abs_diff == min(abs_diff, na.rm=T)) %>%
     #Identify threshold
     dplyr::slice(1) %>% dplyr::select(emperical_quantiles ) %>% pull()
-  
+
   #Create binary raster
   valley_grd <- hand < threshold
   valley_grd[valley_grd==0] <- NA
   
   #Convert to polygon using wbt
-  writeRaster(valley_grd, paste0(temp_dir, "\\valley.tif"), overwrite=T)
+  writeRaster(valley_grd, paste0(temp_dir, "valley.tif"), overwrite=T)
   wbt_raster_to_vector_polygons(
     input = "valley.tif", 
     output = "output.shp", 
     wd=temp_dir)
-  valley_shp <- st_read(paste0(temp_dir,"\\output.shp"), crs=st_crs(r)) 
+  valley_shp <- st_read(paste0(temp_dir,"output.shp"), crs=st_crs(r)) 
   
   #Export Valley Bottom
   list(valley_grd, valley_shp)
@@ -259,8 +264,8 @@ valley_shp <- st_transform(valley_shp, crs = st_crs(crs))
 
 # Define study reach ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Write files to temp data
-st_write(gage, paste0(temp_dir,'\\gage.shp'), append = F)
-writeRaster(r, paste0(temp_dir, "\\r.tif"), overwrite = T)
+st_write(gage, paste0(temp_dir,'gage.shp'), append = F)
+writeRaster(r, paste0(temp_dir, "r.tif"), overwrite = T)
 
 #Create Flow accumulation raster
 #Smooth DEM
@@ -294,13 +299,13 @@ wbt_snap_pour_points(
   wd = temp_dir)
 
 #pull into R env
-gage_snap <- st_read(paste0(temp_dir,"//snap.shp"), crs = st_crs(crs))
+gage_snap <- st_read(paste0(temp_dir,"snap.shp"), crs = st_crs(crs))
 
 #identify study reach
 reach <- stream_shp[st_buffer(gage_snap, 5),]
 
 #Define valley area adjacent to reach ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-xs_fun<-function(reach, width=1000){
+xs_fun<-function(reach, width=2000){
   
   #Define points along reach
   reach_pnts <- st_cast(reach, "POINT")
@@ -365,25 +370,24 @@ xs_fun<-function(reach, width=1000){
 xs <- xs_fun(reach)
 xs <- st_combine(xs)
 xs <- st_cast(xs, 'MULTILINESTRING')
+st_write(xs, paste0(temp_dir,"xs.shp"), append=FALSE)
 
 #Split polygon by xs
 valley_chopped_shp <- st_split(valley_shp, xs) %>%  st_collection_extract(c("POLYGON"))
 valley_reach <- valley_chopped_shp[gage_snap,]
-
-#Plot for funzies
-mapview(valley_reach) + mapview(gage)
+st_write(valley_reach, paste0(temp_dir,"valley_reach.shp"), append = F)
 
 # Estimate storage ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #depth to bedrock
 valley_reach_proj <- st_transform(valley_reach, st_crs(d2b))
 valley_d2b <- raster::crop(d2b, valley_reach_proj)
 valley_d2b <- raster::mask(valley_d2b, valley_reach_proj)
-valley_d2b <- raster::cellStats(valley_d2b, stat = mean)/100
+valley_d2b <- raster::cellStats(valley_d2b, stat = base::mean)/100
 
 #porosity
 valley_reach_proj <- st_transform(valley_reach, st_crs(porosity))
 valley_porosity <- porosity[valley_reach_proj,]
-valley_porosity <- mean(valley_porosity$Porosity, na.rm=T)
+valley_porosity <- base::mean(valley_porosity$Porosity, na.rm=T)
 
 #storage
 valley_storage_m <- valley_d2b*valley_porosity
@@ -430,6 +434,8 @@ valley_soil_thickness <- horizons(soil_data) %>%
 valley_soil_thickness <- valley_soil_thickness*0.0254 #Convert from in to m
 valley_soil_thickness
 
+write_csv(tibble(valley_ksat, valley_soil_thickness), paste0(temp_dir,"test.csv"))
+
 #EXtract metrics of interest ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Define center of XS
 xs <- xs_fun(reach)
@@ -452,6 +458,7 @@ valley_storage_m3 <- valley_storage_m*valley_area
 
 #output
 valley_metrics <- tibble(
+  staid, 
   valley_length,
   valley_area,
   valley_width, 
@@ -461,6 +468,48 @@ valley_metrics <- tibble(
   valley_ksat, 
   valley_soil_thickness
 )
+
+#Delete temp files and export metrics
+unlink(temp_dir)
 valley_metrics
 }
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 3.0 Apply function in parallel  ----------------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Error function
+error_fun <- function(n){
+  tryCatch(
+    expr=fun(n), 
+    error = function(e)
+      tibble(
+        staid = gage_data$staid[n], 
+        valley_length = NA,
+        valley_area = NA,
+        valley_width = NA, 
+        valley_slope = NA, 
+        valley_storage_m = NA, 
+        valley_storage_m3 = NA, 
+        valley_ksat = NA, 
+        valley_soil_thickness = NA
+      )
+  )
+}
+
+
+#Record Start time
+t0 <- Sys.time()
+
+#Apply function
+output<-lapply(
+  seq(1, length(gage_data)), #length(gage_data)
+  error_fun)
+
+#Record finish time
+tf <- Sys.time()
+tf-t0
+
+#Now, bind rows from list output
+output<-output %>% bind_rows()
+output
 
