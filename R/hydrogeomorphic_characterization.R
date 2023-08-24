@@ -373,7 +373,11 @@ xs <- st_cast(xs, 'MULTILINESTRING')
 st_write(xs, paste0(temp_dir,"xs.shp"), append=FALSE)
 
 #Split polygon by xs
-valley_chopped_shp <- st_split(valley_shp, xs) %>%  st_collection_extract(c("POLYGON"))
+valley_chopped_shp <- st_split(valley_shp, xs) 
+valley_chopped_shp <- valley_chopped_shp[!st_is_empty(valley_chopped_shp), dropped = F]
+valley_chopped_shp <- st_collection_extract(valley_chopped_shp, c("POLYGON"))
+
+#Define reach based on snapped gage
 valley_reach <- valley_chopped_shp[gage_snap,]
 st_write(valley_reach, paste0(temp_dir,"valley_reach.shp"), append = F)
 
@@ -434,8 +438,6 @@ valley_soil_thickness <- horizons(soil_data) %>%
 valley_soil_thickness <- valley_soil_thickness*0.0254 #Convert from in to m
 valley_soil_thickness
 
-write_csv(tibble(valley_ksat, valley_soil_thickness), paste0(temp_dir,"test.csv"))
-
 #EXtract metrics of interest ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Define center of XS
 xs <- xs_fun(reach)
@@ -475,7 +477,7 @@ valley_metrics
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 3.0 Apply function in parallel  ----------------------------------------------
+# 3.0 Apply function -----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Error function
 error_fun <- function(n){
@@ -502,7 +504,7 @@ t0 <- Sys.time()
 
 #Apply function
 output<-lapply(
-  seq(1, length(gage_data)), #length(gage_data)
+  seq(1, nrow(gage_data)), 
   error_fun)
 
 #Record finish time
@@ -513,3 +515,6 @@ tf-t0
 output<-output %>% bind_rows()
 output
 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 4.0 Apply function -----------------------------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
