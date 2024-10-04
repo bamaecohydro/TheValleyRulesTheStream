@@ -409,12 +409,12 @@ soil_data <- fetchSDA(sql, duplicates = T)
 #Create unit table to describe mapunit soil series contributions
 map_unit <- site(soil_data) %>% 
   as_tibble() %>% 
-  select(cokey, comppct_r)
+  dplyr::select(cokey, comppct_r)  
 
 #Extract Ksat data from mapunit
 valley_ksat <- horizons(soil_data) %>% 
   as_tibble() %>% 
-  select(cokey,hzdepb_r, hzdept_r,ksat_r) %>% 
+  dplyr::select(cokey,hzdepb_r, hzdept_r,ksat_r) %>% 
   mutate(
     hrz_thickness = hzdepb_r - hzdept_r,
     ksat_thickness = ksat_r*hrz_thickness) %>% 
@@ -516,5 +516,6 @@ output<-output %>% bind_rows()
 output
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# 4.0 Apply function -----------------------------------------------------------
+# 4.0 Export data -----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+write_csv(output, "data//output.csv")

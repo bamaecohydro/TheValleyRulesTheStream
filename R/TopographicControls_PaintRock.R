@@ -6,7 +6,7 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~.
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Setup workspace --------------------------------------------------------------
+# 1.0 Setup workspace ----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #clear workspace (sorry JP!)
 remove(list=ls())
@@ -20,33 +20,35 @@ library(whitebox)
 library(stars)
 library(mapview)
 library(tmap)
+library(plotly)
 
 #Create temp dir
 temp_dir <- "C:\\WorkspaceR\\TheValleyRulesTheStream\\scratch\\"
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Gather data ------------------------------------------------------------------
+# 2.0 Gather data --------------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Define watershed outlet
 outlet<-tibble(
-  lat = 33.76218, 
-  lon = -85.5955) %>% 
+  lat = 34.968669, 
+  lon = -86.165439) %>% 
   st_as_sf(
     coords = c("lon", "lat"), 
     crs = '+proj=longlat +datum=WGS84 +no_defs') %>% 
   st_transform(crs = 3160)
 
+#Turn off 3D distance calcs
 sf_use_s2(FALSE)
 
 #Download DEM
-dem <- get_elev_raster(outlet, z=14)
+dem <- get_elev_raster(st_buffer(outlet,1000), z=14)
 
 #Export data to temp directory
 writeRaster(dem,paste0(temp_dir, 'dem.tif'), overwrite=T)
 st_write(outlet, paste0(temp_dir, "outlet.shp"), append=T)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Create fdr and face ----------------------------------------------------------
+# 3.0 Create fdr and fac ------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Smooth the dem
 wbt_fast_almost_gaussian_filter(
@@ -73,12 +75,12 @@ wbt_d8_pointer(
 wbt_d8_flow_accumulation(
   input = 'dem_breach.tif',
   output = 'fac.tif',
-  pntr = F,
+  out_type = "catchment area",
   wd = temp_dir
 )
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Delineate Watershed-----------------------------------------------------------
+# 4.0 Delineate Watershed-----------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Snap pour point
 wbt_snap_pour_points(
@@ -119,19 +121,42 @@ writeRaster(fac, paste0(temp_dir,"fac_shed.tif"), overwrite=TRUE)
 writeRaster(fdr, paste0(temp_dir,"fdr_shed.tif"), overwrite=TRUE)
 
 #plot for funzies
-mapview(log10(fac))
+mapview(fac)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Estimate scaling factors  ----------------------------------------------------
+# 5.0 Estimate flownetwork  ----------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#Estimate alpha based on accumulation area threshold for channel heads ---------
+#Define threshold for channel head in m2
+threshold <- 5 * 10000
+
+#Extract streams based on threshold
+wbt_extract_streams(
+  flow_accum = "fac_shed.tif",
+  output = "flow_net.tif",
+  threshold = threshold, 
+  wd = temp_dir)
+
+#Create points along stream
+streams <- raster(paste0(temp_dir,"flow_net.tif"))
+streams <- rasterToPoints(streams) %>% 
+  as_tibble() %>% 
+  filter(flow_net == 1) %>% 
+  st_as_sf(coords = c("x", "y"), crs = st_crs(fac))
+
+#Plot for vizual inspection
+mapview(streams)
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 6.0 Estimate scaling factors  ------------------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#6.1 Estimate alpha based on accumulation area threshold for channel heads -----
 #Create function
-fun <- function(n_cells){
+fun <- function(n){
   #Create flow net
   wbt_extract_streams(
     flow_accum = "fac_shed.tif",
     output = "flow_net.tif",
-    threshold = n_cells, 
+    threshold = n, 
     wd = temp_dir)
   
   #convert to vector
@@ -154,58 +179,56 @@ fun <- function(n_cells){
   
   #Create export 
   tibble(
-    A_channel_head_m2 = n_cells*res(fac)[1]*res(fac)[2], 
+    A_channel_head_m2 = n, 
     stream_length_m = stream_length %>% paste0() %>% as.numeric(),
     stream_density_m_m2 = stream_density %>% paste0() %>% as.numeric()) 
 }
 
 #Apply function
 output <- lapply(
-  X = seq(100, 1000, 10), 
+  X = seq(1*10000, 10*10000, 1000), 
   FUN = fun
 ) %>% bind_rows()
 
 #export results for safe keeping
-write.csv(output, "scratch//output_TAL.csv")
+write.csv(output, "scratch//output_PaintRock.csv")
 
 #ugly plot (for now)
 alpha_plot <- output %>% 
   mutate(A_channel_head_ha = A_channel_head_m2/10000) %>% 
-  filter(A_channel_head_ha > 0.5) %>% 
-  filter(A_channel_head_ha < 1.5) %>% 
+  # filter(A_channel_head_ha > 0.5) %>% 
+  # filter(A_channel_head_ha < 1.5) %>% 
   ggplot(aes(x=A_channel_head_ha, y=stream_density_m_m2)) + 
-    geom_point() + 
-    theme_bw()+
-    theme(
-      axis.title = element_text(size = 14), 
-      axis.text  = element_text(size = 10)
-    ) + 
-    xlab("Threshold Area [ha]") +
-    ylab("Stream Density [m^2/m]") +
-    scale_x_log10() + 
-    scale_y_log10()
+  geom_point() + 
+  theme_bw()+
+  theme(
+    axis.title = element_text(size = 14), 
+    axis.text  = element_text(size = 10)
+  ) + 
+  xlab("Threshold Area [ha]") +
+  ylab("Stream Density [m^2/m]") +
+  scale_x_log10() + 
+  scale_y_log10()
 
 #plot for funzies
-alpha_plot
+ggplotly(alpha_plot)
 
 #Filter results to area of interest
 output <- output %>% 
   mutate(A_channel_head_ha = A_channel_head_m2/10000) %>% 
-  filter(A_channel_head_ha > 0.5) %>% 
-  filter(A_channel_head_ha < 1.5)
+  filter(A_channel_head_ha > 3) %>% 
+  filter(A_channel_head_ha < 4.9)
 
 alpha <- lm(log10(output$stream_density_m_m2)~log10(output$A_channel_head_m2))
+summary(alpha)
 alpha <- summary(alpha)$coefficients[2]*-1
 
-#Estimate theta (scaling factor between slope and area) ------------------------
-#Define stream extent based on 0.75 ha threshold
-n_cells <- ceiling(7500/(res(fac)[1]*res(fac)[2]))
-
+#6.2 Estimate theta (scaling factor between slope and area) ------------------------
 #Extract streams based on threshold
 wbt_extract_streams(
   flow_accum = "fac_shed.tif",
   output = "flow_net.tif",
-  threshold = n_cells, 
+  threshold = threshold, 
   wd = temp_dir)
 
 #Estimate curvature 
@@ -230,7 +253,7 @@ output <- flow_pnts %>%
     slope                = raster::extract(slope, flow_pnts)) 
 
 #ugly plot (for now)
-output %>% 
+theta_plot <- output %>% 
   mutate(contributing_area_ha = contributing_area_m2/10000) %>% 
   ggplot(aes(x=contributing_area_ha, y=slope)) + 
   geom_point() + 
@@ -244,28 +267,28 @@ output %>%
   scale_x_log10() +
   scale_y_log10() 
 
+ggplotly(theta_plot)
+
 #esimate scaling coefficient
 theta <- lm(log10(output$slope)~log10(output$contributing_area_m2))
+summary(theta)
 theta <- summary(theta)$coefficients[2]*-1
-#Estimate delta (scaling factor between curviture and area) ---------------------
-#Define stream extent based on 0.75 ha threshold
-n_cells <- ceiling(7500/(res(fac)[1]*res(fac)[2]))
-
+#6.3 Estimate delta (scaling factor between curviture and area) ---------------------
 #Extract streams based on threshold
 wbt_extract_streams(
   flow_accum = "fac_shed.tif",
   output = "flow_net.tif",
-  threshold = n_cells, 
+  threshold = threshold, 
   wd = temp_dir)
 
 #Estimate curvature 
-wbt_total_curvature(
+wbt_mean_curvature(
   dem = "dem_smooth.tif",
   output = "curv.tif", 
   wd = temp_dir
 )
 curv <- raster(paste0(temp_dir, "curv.tif"))
-
+curv <- curv*-1
 
 #Create points along stream
 flow_grid <- raster(paste0(temp_dir,"flow_net.tif"))
@@ -293,16 +316,34 @@ output %>%
   ) + 
   xlab("Area [ha]") +
   ylab("Curviture [1/km]") +
-  scale_x_log10() 
-   
+  scale_x_log10() +
+  scale_y_log10()
+
 #esimate scaling coefficient
-delta <- lm(output$curvature~log10(output$contributing_area_m2))
+delta <- lm((output$curvature*1000)~log10(output$contributing_area_m2/(1000^2)))
+summary(delta)
 delta <- summary(delta)$coefficients[2]
 
-#Estimate gamma based on Prancevich and Kirchner derivation --------------------
-gamma <- 1 + theta + alpha/0.1
-
-
+#6.4 Estimate gamma based on Prancevich and Kirchner derivation -----------------
+#Estimate beta
 k1 <- 1.5
 k2 <- -0.51
-alpha/(k1*delta + k2+ theta+1)
+beta_predicted <- alpha/((k1*delta) + k2+ theta+1)
+beta_predicted <- if_else(beta_predicted < 0.04, 0.04, beta_predicted)
+
+#Estimate gamma
+gamma <- 1 + theta + (alpha/beta_predicted)
+
+#6.5 Export results ------------------------------------------------------------
+tibble(
+  site = "PFR",
+  alpha,
+  theta,
+  delta,
+  gamma, 
+  beta_predicted
+)
+
+
+#site  alpha theta delta gamma beta_predicted
+#PFR   0.586 0.453  4.05  8.47         0.0835
